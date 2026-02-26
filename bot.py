@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import time
 import re
+import urllib.parse
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
@@ -22,7 +23,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # Информация о создателе
 CREATOR_NAME = "Pavel"
 CREATOR_NICKNAME = "@Gdrag182"
-BOT_VERSION = "2.4"
+BOT_VERSION = "2.5"
 
 # Словарь для хранения временных данных пользователей
 user_data = {}
@@ -187,6 +188,83 @@ def should_send_today(days_string):
         return str(today) in days_list
 
 
+# Функция для получения координат города (геокодинг)
+def get_city_coordinates(city_name):
+    try:
+        encoded_city = urllib.parse.quote(city_name)
+        url = f'http://api.openweathermap.org/geo/1.0/direct?q={encoded_city}&limit=1&appid={WEATHER_API_KEY}'
+        response = requests.get(url)
+        data = response.json()
+
+        if data and len(data) > 0:
+            lat = data[0]['lat']
+            lon = data[0]['lon']
+            found_city = data[0].get('local_names', {}).get('ru', data[0]['name'])
+            country = data[0].get('country', '')
+            return lat, lon, found_city, country
+        return None, None, None, None
+    except Exception as e:
+        print(f"Ошибка геокодинга: {e}")
+        return None, None, None, None
+
+
+# Функция для получения погоды по координатам
+def get_weather_by_coords(lat, lon, city_name, country):
+    try:
+        url = f'https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric&lang=ru'
+        response = requests.get(url)
+        data = response.json()
+
+        if response.status_code == 200:
+            # Получаем данные о погоде
+            temperature = data['main']['temp']
+            feels_like = data['main']['feels_like']
+            humidity = data['main']['humidity']
+            pressure = data['main']['pressure']
+            wind_speed = data['wind']['speed']
+            weather_main = data['weather'][0]['main'].lower()
+            weather_description = data['weather'][0]['description']
+
+            # Переводим погодные условия
+            weather_emoji = weather_conditions.get(weather_main, '🌡')
+
+            # Красивое форматирование погоды
+            weather_message = (
+                f"🏙 *{city_name}, {country}*\n\n"
+                f"{weather_emoji} *{weather_description.capitalize()}*\n\n"
+                f"🌡 *Температура:* {temperature:.1f}°C\n"
+                f"🤔 *Ощущается как:* {feels_like:.1f}°C\n"
+                f"💧 *Влажность:* {humidity}%\n"
+                f"📊 *Давление:* {pressure} гПа\n"
+                f"💨 *Ветер:* {wind_speed} м/с\n\n"
+                f"✨ Хорошего дня!"
+            )
+
+            return weather_message, None
+        else:
+            return None, f"❌ Не удалось получить погоду для города {city_name}"
+
+    except Exception as e:
+        return None, f"😕 Произошла ошибка. Попробуй позже!"
+
+
+# Функция для получения погоды (основная, с геокодингом)
+def get_weather_info(city):
+    try:
+        # Сначала получаем координаты города
+        lat, lon, found_city, country = get_city_coordinates(city)
+
+        if lat and lon:
+            # Получаем погоду по координатам
+            return get_weather_by_coords(lat, lon, found_city, country)
+        else:
+            return None, f"❌ Город '{city}' не найден. Проверь название или попробуй написать на английском!"
+
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return None, f"😕 Произошла ошибка. Попробуй позже!"
+
+
 # Фоновая задача для проверки напоминаний
 def check_reminders():
     while True:
@@ -337,47 +415,6 @@ def get_main_keyboard():
     ]
     keyboard.add(*buttons)
     return keyboard
-
-
-# Функция для получения погоды
-def get_weather_info(city):
-    try:
-        url = f'http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=ru'
-        response = requests.get(url)
-        data = response.json()
-
-        if response.status_code == 200:
-            # Получаем данные о погоде
-            temperature = data['main']['temp']
-            feels_like = data['main']['feels_like']
-            humidity = data['main']['humidity']
-            pressure = data['main']['pressure']
-            wind_speed = data['wind']['speed']
-            weather_main = data['weather'][0]['main'].lower()
-            weather_description = data['weather'][0]['description']
-            country = data['sys']['country']
-
-            # Переводим погодные условия
-            weather_emoji = weather_conditions.get(weather_main, '🌡')
-
-            # Красивое форматирование погоды
-            weather_message = (
-                f"🏙 *{city}, {country}*\n\n"
-                f"{weather_emoji} *{weather_description.capitalize()}*\n\n"
-                f"🌡 *Температура:* {temperature:.1f}°C\n"
-                f"🤔 *Ощущается как:* {feels_like:.1f}°C\n"
-                f"💧 *Влажность:* {humidity}%\n"
-                f"📊 *Давление:* {pressure} гПа\n"
-                f"💨 *Ветер:* {wind_speed} м/с\n\n"
-                f"✨ Хорошего дня!"
-            )
-
-            return weather_message, None
-        else:
-            return None, f"❌ Город '{city}' не найден. Проверь название!"
-
-    except Exception as e:
-        return None, f"😕 Произошла ошибка. Попробуй позже!"
 
 
 # Команда /start с красивым приветствием
@@ -707,4 +744,12 @@ if __name__ == '__main__':
     print(f"📱 Версия: {BOT_VERSION}")
     print("⏰ Система напоминаний активна (с поддержкой дней недели)")
     print("📱 Нажми Ctrl+C для остановки")
-    bot.infinity_polling()
+
+    # Бесконечный цикл с перезапуском при ошибках
+    while True:
+        try:
+            bot.polling(none_stop=True)
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            time.sleep(5)
+            continue
